@@ -1,0 +1,28 @@
+dataset:
+  debug: false 
+  dense_reg: False
+  dense_wh: False
+  reg_offset: True
+  keep_res: False
+  input_h: 384
+  input_w: 384
+
+  not_rand_crop: False # yes for random crop
+  scale: 0.4
+  shift: 0.1
+  flip: 0.5 # flip probability
+  down_ratio: 4
+  dense_wh: False
+  no_color_aug: False # yes for color augmentation
+
+batch_size: 32
+num_workers: 4
+lr: 0.00025
+
+loss:
+  wh_weight: 0.1
+  hm_weight: 1.0
+  off_weight: 1.0
+  reg_offset: True
+  num_stacks: 1
+  mse_loss: False
