@@ -127,20 +127,29 @@ def main(args):
             torch.cuda.empty_cache()
 
         # if the epoch is evaluation interval, evaluate the model
-        # if epoch % eval_interval == 0:
-        #     model_with_loss.eval()
-        #     for batch_idx, (data, target) in enumerate(val_loader):
-        #         batch = {k:batch[k].to(device=device, non_blocking=True) for k in batch.keys() if k != 'meta'}
-        #         output, loss, loss_stats = model_with_loss(batch)
+        if epoch % eval_interval == 0:
+            model_with_loss.eval()
+            with torch.no_grad():
+              for batch_idx, (data, target) in enumerate(val_loader):
+                  batch = {k:batch[k].to(device=device, non_blocking=True) for k in batch.keys() if k != 'meta'}
+                  output, loss, loss_stats = model_with_loss(batch)
+                  hm = output['hm'].sigmoid_()
+                  wh = output['wh']
+                  reg = output['reg']
 
-        #         # TODO: compare the outputs with the labels and compute mAp (COCO)
+                  torch.cuda.synchronize()
+                  dets = ctdet_decode(hm, wh, reg=reg, cat_spec_wh=self.opt.cat_spec_wh, K=self.opt.K)
+                  dets = post_process(dets, meta, scale)
+                  torch.cuda.synchronize()
+      
+                  # TODO: compare the outputs with the labels and compute mAp (COCO)
 
-        #         del batch, output, loss, loss_stats
-        #         torch.cuda.empty_cache()
+                  del batch, output, loss, loss_stats
+                  torch.cuda.empty_cache()
 
-        # if epoch % save_interval == 0:
-        #     # save the model
-        #     model.save(os.path.joint(SAVE_DIR, 'latest.pth'))
+        if epoch % save_interval == 0:
+            # save the model
+            model.save(os.path.joint(SAVE_DIR, 'latest.pth'))
 
 
 if __name__  == "__main__":
