@@ -363,7 +363,6 @@ class CTDetDataset(torch.utils.data.Dataset):
                 
                 if self.cfg['dense_wh']:
                     draw_dense_reg(dense_wh, hm.max(axis=0), ct_int, wh[k], radius)
-
                 gt_det.append([ct[0] - w / 2, ct[1] - h / 2, ct[0] + w / 2, ct[1] + h / 2, 1, cls_id])
 
         ret = {'input': inp, 'hm': hm, 'reg_mask': reg_mask, 'ind': ind, 'wh': wh}
@@ -378,8 +377,8 @@ class CTDetDataset(torch.utils.data.Dataset):
         if self.cfg['reg_offset']:
             ret.update({'reg': reg})
         # if self.cfg['debug'] > 0 or not self.split == 'train':
-        #     gt_det = np.array(gt_det, dtype=np.float32) if len(gt_det) > 0 else np.zeros((1, 6), dtype=np.float32)
-        #     meta = {'c': c, 's': s, 'gt_det': gt_det, 'img_id': img_id}
-        #     ret['meta'] = meta
+        gt_det = np.array(gt_det, dtype=np.float32) if len(gt_det) > 0 else np.zeros((1, 6), dtype=np.float32)
+        meta = {'mc': c, 'ms': s, 'img_id': img_id, 'out_height': output_h, 'out_width': output_w} #'gt_det': gt_det, 'input_h': input_h, 'input_w': input_w}
+        ret.update({'meta' : meta})
 
         return ret

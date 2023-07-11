@@ -1,21 +1,21 @@
 import argparse
 import logging
+from tqdm import tqdm
+
 import torch
 import yaml
+import numpy as np
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.data import DataLoader
 from torch.utils.data import random_split
-from torchvision.datasets import MNIST
 from torchvision import transforms
-import pytorch_lightning as pl
-
 
 from model import get_pose_net 
 from losses import CtdetLoss
 
 from dataset import CTDetDataset
 
+from utils import ctdet_decode, ctdet_post_process, merge_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,7 @@ def main(args):
 
     lr = 1e-3
     num_classes = 80
+    max_obj = 128
     heads = {'hm': num_classes, 'reg': 2, 'wh': 2}
     head_conv = 64
     num_layers = 18 # 34 
@@ -115,41 +116,63 @@ def main(args):
 
     for epoch in range(epochs):
         # train one epoch
-        model.train()
-        for iter_id, batch in enumerate(train_loader):
-            batch = {k:batch[k].to(device=device, non_blocking=True) for k in batch.keys() if k != 'meta'}
-            output, loss, loss_stats = model_with_loss(batch)
-            loss = loss.mean()
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            del batch, output, loss, loss_stats
-            torch.cuda.empty_cache()
+        # model.train()
+        # for batch in tqdm(train_loader):
+        #     batch = {k:batch[k].to(device=device, non_blocking=True) for k in batch.keys() if k != 'meta'}
+        #     output, loss, loss_stats = model_with_loss(batch)
+        #     loss = loss.mean()
+        #     optimizer.zero_grad()
+        #     loss.backward()
+        #     optimizer.step()
+        #     del batch, output, loss, loss_stats
+        #     torch.cuda.empty_cache()
 
         # if the epoch is evaluation interval, evaluate the model
         if epoch % eval_interval == 0:
             model_with_loss.eval()
             with torch.no_grad():
-              for batch_idx, (data, target) in enumerate(val_loader):
+              detections = []
+              scale = 1 
+              for batch in val_loader:
+
+                  meta = batch['meta'].copy()
                   batch = {k:batch[k].to(device=device, non_blocking=True) for k in batch.keys() if k != 'meta'}
                   output, loss, loss_stats = model_with_loss(batch)
                   hm = output['hm'].sigmoid_()
                   wh = output['wh']
                   reg = output['reg']
-
+                  dets = ctdet_decode(hm, wh, reg=reg, cat_spec_wh=False, K=max_obj)
+                  
                   torch.cuda.synchronize()
-                  dets = ctdet_decode(hm, wh, reg=reg, cat_spec_wh=self.opt.cat_spec_wh, K=self.opt.K)
-                  dets = post_process(dets, meta, scale)
-                  torch.cuda.synchronize()
-      
-                  # TODO: compare the outputs with the labels and compute mAp (COCO)
+                  
+                  dets = dets.detach().cpu().numpy()
+                  batch_sz = dets.shape[0]
+                  dets = dets.reshape(batch_sz, -1, dets.shape[2])
+                  
+                  mc = meta['mc'].numpy()
+                  ms = meta['ms'].numpy() 
+                  h = meta['out_height'].numpy()
+                  w = meta['out_width'].numpy()
+                  dets = ctdet_post_process(dets.copy(), mc, ms, h, w, num_classes=num_classes) 
 
-                  del batch, output, loss, loss_stats
-                  torch.cuda.empty_cache()
+                  for i in range(batch_sz):
+                    for j in range(1, num_classes+1):
+                      dets[i][j] = np.array(dets[i][j], dtype=np.float32).reshape(-1, 5)
+                      dets[i][j][:, :4] /= scale
 
-        if epoch % save_interval == 0:
-            # save the model
-            model.save(os.path.joint(SAVE_DIR, 'latest.pth'))
+                    # results = merge_outputs(dets[i], num_classes=num_classes, max_per_image=max_obj)
+                  
+                    detections.append(dets)
+                  break # NOMERGE
+            
+            import pdb; pdb.set_trace()
+            # TODO: compare the outputs with the labels and compute mAp (COCO)
+            del batch, output, loss, loss_stats
+            torch.cuda.empty_cache()
+
+        # if epoch % save_interval == 0:
+        #     # save the model
+        #     model.save(os.path.joint(SAVE_DIR, 'latest.pth'))
 
 
 if __name__  == "__main__":

@@ -6,6 +6,10 @@ dataset:
   keep_res: False
   input_h: 384
   input_w: 384
+  flip: 0.5
+  down_ratio: 4
+  max_objs: 128
+  no_color_aug: True
 
   not_rand_crop: False # yes for random crop
   scale: 0.4
@@ -15,8 +19,8 @@ dataset:
   dense_wh: False
   no_color_aug: False # yes for color augmentation
 
-batch_size: 32
-num_workers: 4
+batch_size: 2 
+num_workers: 1 
 lr: 0.00025
 
 loss:
@@ -26,3 +30,5 @@ loss:
   reg_offset: True
   num_stacks: 1
   mse_loss: False
+
+K: 100
