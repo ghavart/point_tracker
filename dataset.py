@@ -11,180 +11,60 @@ import random
 from pycocotools import coco
 
 
-def flip(img):
-  return img[:, :, ::-1].copy()  
+def rad(a, b, c):
+    sq = np.sqrt(b**2 - 4 * a * c)
+    return (b + sq) / 2
 
-def grayscale(image):
-    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-def lighting_(data_rng, image, alphastd, eigval, eigvec):
-    alpha = data_rng.normal(scale=alphastd, size=(3, ))
-    image += np.dot(eigvec, eigval * alpha)
-
-def blend_(alpha, image1, image2):
-    image1 *= alpha
-    image2 *= (1 - alpha)
-    image1 += image2
-
-def saturation_(data_rng, image, gs, gs_mean, var):
-    alpha = 1. + data_rng.uniform(low=-var, high=var)
-    blend_(alpha, image, gs[:, :, None])
-
-def brightness_(data_rng, image, gs, gs_mean, var):
-    alpha = 1. + data_rng.uniform(low=-var, high=var)
-    image *= alpha
-
-def contrast_(data_rng, image, gs, gs_mean, var):
-    alpha = 1. + data_rng.uniform(low=-var, high=var)
-    blend_(alpha, image, gs_mean)
-
-def color_aug(data_rng, image, eig_val, eig_vec):
-    functions = [brightness_, contrast_, saturation_]
-    random.shuffle(functions)
-
-    gs = grayscale(image)
-    gs_mean = gs.mean()
-    for f in functions:
-        f(data_rng, image, gs, gs_mean, 0.4)
-    lighting_(data_rng, image, 0.1, eig_val, eig_vec)
-
-
-def get_3rd_point(a, b):
-    direct = a - b
-    return b + np.array([-direct[1], direct[0]], dtype=np.float32)
-
-
-def get_dir(src_point, rot_rad):
-    sn, cs = np.sin(rot_rad), np.cos(rot_rad)
-
-    src_result = [0, 0]
-    src_result[0] = src_point[0] * cs - src_point[1] * sn
-    src_result[1] = src_point[0] * sn + src_point[1] * cs
-
-    return src_result
-
-
-def get_affine_transform(center,
-                         scale,
-                         rot,
-                         output_size,
-                         shift=np.array([0, 0], dtype=np.float32),
-                         inv=0):
-    if not isinstance(scale, np.ndarray) and not isinstance(scale, list):
-        scale = np.array([scale, scale], dtype=np.float32)
-
-    scale_tmp = scale
-    src_w = scale_tmp[0]
-    dst_w = output_size[0]
-    dst_h = output_size[1]
-
-    rot_rad = np.pi * rot / 180
-    src_dir = get_dir([0, src_w * -0.5], rot_rad)
-    dst_dir = np.array([0, dst_w * -0.5], np.float32)
-
-    src = np.zeros((3, 2), dtype=np.float32)
-    dst = np.zeros((3, 2), dtype=np.float32)
-    src[0, :] = center + scale_tmp * shift
-    src[1, :] = center + src_dir + scale_tmp * shift
-    dst[0, :] = [dst_w * 0.5, dst_h * 0.5]
-    dst[1, :] = np.array([dst_w * 0.5, dst_h * 0.5], np.float32) + dst_dir
-
-    src[2:, :] = get_3rd_point(src[0, :], src[1, :])
-    dst[2:, :] = get_3rd_point(dst[0, :], dst[1, :])
-
-    if inv:
-        trans = cv2.getAffineTransform(np.float32(dst), np.float32(src))
-    else:
-        trans = cv2.getAffineTransform(np.float32(src), np.float32(dst))
-
-    return trans
-
-
-def affine_transform(pt, t):
-    new_pt = np.array([pt[0], pt[1], 1.], dtype=np.float32).T
-    new_pt = np.dot(t, new_pt)
-    return new_pt[:2]
 
 def gaussian_radius(det_size, min_overlap=0.7):
-    height, width = det_size
-
+    width, height = det_size
+    
     a1  = 1
     b1  = (height + width)
     c1  = width * height * (1 - min_overlap) / (1 + min_overlap)
-    sq1 = np.sqrt(b1 ** 2 - 4 * a1 * c1)
-    r1  = (b1 + sq1) / 2
+    r1 = rad(a1, b1, c1)
 
     a2  = 4
     b2  = 2 * (height + width)
     c2  = (1 - min_overlap) * width * height
-    sq2 = np.sqrt(b2 ** 2 - 4 * a2 * c2)
-    r2  = (b2 + sq2) / 2
-
+    r2 = rad(a2, b2, c2)
+    
     a3  = 4 * min_overlap
     b3  = -2 * min_overlap * (height + width)
     c3  = (min_overlap - 1) * width * height
-    sq3 = np.sqrt(b3 ** 2 - 4 * a3 * c3)
-    r3  = (b3 + sq3) / 2
-    
+    r3 = rad(a3, b3, c3)
+
     return min(r1, r2, r3)
+
 
 def gaussian2D(shape, sigma=1):
     m, n = [(ss - 1.) / 2. for ss in shape]
     y, x = np.ogrid[-m:m+1,-n:n+1]
-
     h = np.exp(-(x * x + y * y) / (2 * sigma * sigma))
-    h[h < np.finfo(h.dtype).eps * h.max()] = 0 # making sure all the negligible values are zeroed out
+    
+    # zeroing the negligible values
+    eps = np.finfo(h.dtype).eps * h.max()
+    h[h < eps] = 0
+    
     return h
+
 
 def draw_umich_gaussian(heatmap, center, radius, k=1):
     diameter = 2 * radius + 1
-    gaussian = gaussian2D((diameter, diameter), sigma=diameter / 6) # 
-
-    x, y = int(center[0]), int(center[1])
-    height, width = heatmap.shape[0:2]
-    radius = int(radius)
-    left, right = min(x, radius), min(width - x, radius + 1)
-    top, bottom = min(y, radius), min(height - y, radius + 1)
-    masked_heatmap  = heatmap[y - top:y + bottom, x - left:x + right]
-    masked_gaussian = gaussian[radius - top:radius + bottom, radius - left:radius + right]
-    
-    if min(masked_gaussian.shape) > 0 and min(masked_heatmap.shape) > 0:
-        np.maximum(masked_heatmap, masked_gaussian * k, out=masked_heatmap)
-    
-    return heatmap
-
-
-def draw_dense_reg(regmap, heatmap, center, value, radius, is_offset=False):
-    diameter = 2 * radius + 1
     gaussian = gaussian2D((diameter, diameter), sigma=diameter / 6)
-    value = np.array(value, dtype=np.float32).reshape(-1, 1, 1)
-    dim = value.shape[0]
-    reg = np.ones((dim, diameter*2+1, diameter*2+1), dtype=np.float32) * value
-    if is_offset and dim == 2:
-        delta = np.arange(diameter*2+1) - radius
-        reg[0] = reg[0] - delta.reshape(1, -1)
-        reg[1] = reg[1] - delta.reshape(-1, 1)
-
-    x, y = int(center[0]), int(center[1])
-
+    
+    # find the portion of the heatmap to past the gaussian to
+    x, y = center
     height, width = heatmap.shape[0:2]
-
     left, right = min(x, radius), min(width - x, radius + 1)
     top, bottom = min(y, radius), min(height - y, radius + 1)
-
     masked_heatmap = heatmap[y - top:y + bottom, x - left:x + right]
-    masked_regmap = regmap[:, y - top:y + bottom, x - left:x + right]
     masked_gaussian = gaussian[radius - top:radius + bottom, radius - left:radius + right]
     
-    masked_reg = reg[:, radius - top:radius + bottom, radius - left:radius + right]
-    
-    if min(masked_gaussian.shape) > 0 and min(masked_heatmap.shape) > 0: # TODO debug
-        idx = (masked_gaussian >= masked_heatmap).reshape(1, masked_gaussian.shape[0], masked_gaussian.shape[1])
-        masked_regmap = (1-idx) * masked_regmap + idx * masked_reg
-    
-    regmap[:, y - top:y + bottom, x - left:x + right] = masked_regmap
-
-    return regmap
+    # paste the gaussian onto the heatmap
+    if min(masked_gaussian.shape) > 0 and min(masked_heatmap.shape) > 0:
+        np.maximum(masked_heatmap, masked_gaussian, out=masked_heatmap)
+    return heatmap
 
 
 class CTDetDataset(torch.utils.data.Dataset):
@@ -267,118 +147,72 @@ class CTDetDataset(torch.utils.data.Dataset):
         num_objs = min(len(anns), self.max_objs)
         img = cv2.imread(img_path)
 
-        # augmentation?
-        height, width = img.shape[0], img.shape[1]
-        c = np.array([img.shape[1] / 2., img.shape[0] / 2.], dtype=np.float32)
-        if self.cfg['keep_res']:
-            input_h = (height | self.cfg['pad']) + 1
-            input_w = (width | self.cfg['pad']) + 1
-            s = np.array([input_w, input_h], dtype=np.float32)
-        else:
-            s = max(img.shape[0], img.shape[1]) * 1.0
-            input_h, input_w = self.cfg['input_h'], self.cfg['input_w']
-
-        flipped = False
-        if self.split == 'train':
-            
-            # random crop
-            if not self.cfg['not_rand_crop']:
-                s = s * np.random.choice(np.arange(0.6, 1.4, 0.1))
-                w_border = self._get_border(128, img.shape[1])
-                h_border = self._get_border(128, img.shape[0])
-                c[0] = np.random.randint(low=w_border, high=img.shape[1] - w_border)
-                c[1] = np.random.randint(low=h_border, high=img.shape[0] - h_border)
-            else: 
-                sf = self.cfg['scale']
-                cf = self.cfg['shift']
-                c[0] += s * np.clip(np.random.randn()*cf, -2*cf, 2*cf)
-                c[1] += s * np.clip(np.random.randn()*cf, -2*cf, 2*cf)
-                s = s * np.clip(np.random.randn()*sf + 1, 1 - sf, 1 + sf)
-
-            # random flip 
-            if np.random.random() < self.cfg['flip']:
-                flipped = True
-                img = img[:, ::-1, :]
-                c[0] =  width - c[0] - 1
-        
-        # affine transofrm
-        trans_input = get_affine_transform(c, s, 0, [input_w, input_h])
-        inp = cv2.warpAffine(img, trans_input, (input_w, input_h), flags=cv2.INTER_LINEAR)
-        inp = (inp.astype(np.float32) / 255.)
-
-        # color augmentation 
-        if self.split == 'train' and not self.cfg['no_color_aug']:
-            color_aug(self._data_rng, inp, self._eig_val, self._eig_vec)
+        input_w, input_h, = self.cfg['input_w'], self.cfg['input_h'] 
+        inp = cv2.resize(img, (input_w, input_h), interpolation=cv2.INTER_LINEAR) 
+        # inp = (inp.astype(np.float32) / 255.)
 
         # normalize and to_tensor 
-        inp = (inp - self.mean) / self.std
+        # inp = (inp - self.mean) / self.std
         inp = inp.transpose(2, 0, 1)
+        
+        output_w, output_h = input_w // self.cfg['down_ratio'], input_h // self.cfg['down_ratio']
+        out_scale = np.array([output_w / img.shape[1], output_h / img.shape[0]])
+        # trans_output = get_affine_transform(c, s, 0, [output_w, output_h])
 
-        output_h = input_h // self.cfg['down_ratio']
-        output_w = input_w // self.cfg['down_ratio']
-        num_classes = self.num_classes
-        trans_output = get_affine_transform(c, s, 0, [output_w, output_h])
-
-        hm = np.zeros((num_classes, output_h, output_w), dtype=np.float32)
+        hm = np.zeros((self.num_classes, output_h, output_w), dtype=np.float32)
         wh = np.zeros((self.max_objs, 2), dtype=np.float32)
-        dense_wh = np.zeros((2, output_h, output_w), dtype=np.float32)
+        # dense_wh = np.zeros((2, output_h, output_w), dtype=np.float32)
         
         reg = np.zeros((self.max_objs, 2), dtype=np.float32)
         ind = np.zeros((self.max_objs), dtype=np.int64)
         
         reg_mask = np.zeros((self.max_objs), dtype=np.uint8)
-        cat_spec_wh = np.zeros((self.max_objs, num_classes * 2), dtype=np.float32)
-        cat_spec_mask = np.zeros((self.max_objs, num_classes * 2), dtype=np.uint8)
+        cat_spec_wh = np.zeros((self.max_objs, self.num_classes * 2), dtype=np.float32)
+        cat_spec_mask = np.zeros((self.max_objs, self.num_classes * 2), dtype=np.uint8)
 
         gt_det = []
         for k in range(num_objs):
+            if k > 1:
+                break
+            
             ann = anns[k]
             bbox = self._coco_box_to_bbox(ann['bbox'])
             cls_id = int(self.cat_ids[ann['category_id']])
-            if flipped:
-                bbox[[0, 2]] = width - bbox[[2, 0]] - 1
+
+            bbox_cp = bbox.copy()
+            # resize the box to the input size
+            bbox[[0, 2]] = bbox[[0, 2]] * out_scale[0]
+            bbox[[1, 3]] = bbox[[1, 3]] * out_scale[1]
             
-            bbox[:2] = affine_transform(bbox[:2], trans_output)
-            bbox[2:] = affine_transform(bbox[2:], trans_output)
-            
-            bbox[[0, 2]] = np.clip(bbox[[0, 2]], 0, output_w - 1)
-            bbox[[1, 3]] = np.clip(bbox[[1, 3]], 0, output_h - 1)
+            # bbox[[0, 2]] = np.clip(bbox[[0, 2]], 0, output_w - 1)
+            # bbox[[1, 3]] = np.clip(bbox[[1, 3]], 0, output_h - 1)
             
             h, w = bbox[3] - bbox[1], bbox[2] - bbox[0]
-            if h > 0 and w > 0:
-                radius = gaussian_radius((math.ceil(h), math.ceil(w)))
-                
-                ct = np.array([(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2], dtype=np.float32)
-                ct_int = ct.astype(np.int32)
-                
-                draw_umich_gaussian(hm[cls_id], ct_int, radius)
-                wh[k] = 1. * w, 1. * h
-                ind[k] = ct_int[1] * output_w + ct_int[0]
-                
-                reg[k] = ct - ct_int
-                reg_mask[k] = 1
-                
-                cat_spec_wh[k, cls_id * 2: cls_id * 2 + 2] = wh[k]
-                cat_spec_mask[k, cls_id * 2: cls_id * 2 + 2] = 1
-                
-                if self.cfg['dense_wh']:
-                    draw_dense_reg(dense_wh, hm.max(axis=0), ct_int, wh[k], radius)
-                gt_det.append([ct[0] - w / 2, ct[1] - h / 2, ct[0] + w / 2, ct[1] + h / 2, 1, cls_id])
+            if h <= 0 and w <= 0:
+                continue
+            
+            radius = gaussian_radius((math.ceil(w), math.ceil(h)))
+            ct = np.array([(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2], dtype=np.float32)
+            ct_int = ct.astype(np.int32)
+            
+            draw_umich_gaussian(hm[cls_id], ct_int, int(radius))
+            wh[k] =  w, h
+            ind[k] = ct_int[1] * output_w + ct_int[0]
+            
+            reg[k] = ct - ct_int
+            reg_mask[k] = 1
+            
+            # cat_spec_wh[k, cls_id * 2: cls_id * 2 + 2] = wh[k]
+            # cat_spec_mask[k, cls_id * 2: cls_id * 2 + 2] = 1
+            
+            # if self.cfg['dense_wh']:
+            #     draw_dense_reg(dense_wh, hm.max(axis=0), ct_int, wh[k], radius)
+            # gt_det.append([ct[0] - w / 2, ct[1] - h / 2, ct[0] + w / 2, ct[1] + h / 2, 1, cls_id])
+            gt_det.append([*bbox_cp, 1, cls_id])
 
-        ret = {'input': inp, 'hm': hm, 'reg_mask': reg_mask, 'ind': ind, 'wh': wh}
-        if self.cfg['dense_wh']:
-            hm_a = hm.max(axis=0, keepdims=True)
-            dense_wh_mask = np.concatenate([hm_a, hm_a], axis=0)
-            ret.update({'dense_wh': dense_wh, 'dense_wh_mask': dense_wh_mask})
-            del ret['wh']
-        # elif self.cfg.cat_spec_wh:
-        #     ret.update({'cat_spec_wh': cat_spec_wh, 'cat_spec_mask': cat_spec_mask})
-        #     del ret['wh']
-        if self.cfg['reg_offset']:
-            ret.update({'reg': reg})
-        # if self.cfg['debug'] > 0 or not self.split == 'train':
+        ret = {'input': inp, 'hm': hm, 'reg_mask': reg_mask, 'ind': ind, 'wh': wh, 'reg': reg}
         gt_det = np.array(gt_det, dtype=np.float32) if len(gt_det) > 0 else np.zeros((1, 6), dtype=np.float32)
-        meta = {'mc': c, 'ms': s, 'img_id': img_id, 'out_height': output_h, 'out_width': output_w} #'gt_det': gt_det, 'input_h': input_h, 'input_w': input_w}
+        meta = {'img_id': img_id, 'img_sz': np.array(img.shape[:2]), 'out_scale': out_scale, 'gt_det': gt_det} #'input_h': input_h, 'input_w': input_w}
         ret.update({'meta' : meta})
 
         return ret

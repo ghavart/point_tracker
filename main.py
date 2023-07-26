@@ -1,3 +1,4 @@
+import cv2 
 import argparse
 import logging
 from tqdm import tqdm
@@ -5,53 +6,28 @@ from tqdm import tqdm
 import torch
 import yaml
 import numpy as np
-from torch import nn
-from torch.nn import functional as F
-from torch.utils.data import random_split
-from torchvision import transforms
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
+from pathlib import Path
 
 from model import get_pose_net 
 from losses import CtdetLoss
 
 from dataset import CTDetDataset
+from torch.utils.tensorboard import SummaryWriter
 
-from utils import ctdet_decode, ctdet_post_process, merge_outputs
+
+from utils import ctdet_decode, COCOEvaluator
 
 logger = logging.getLogger(__name__)
 
-DATA_ROOT = "/mnt/data/coco"
-SAVE_ROOT = "./checkpoints"
+#DATA_ROOT = "/mnt/data/coco"
+DATA_ROOT = "/home/art/data_tmp/coco"
+SAVE_ROOT = Path("./checkpoints")
 
-
-# class LitAutoEncoder(pl.LightningModule):
-# 	def __init__(self):
-# 		super().__init__()
-#         self.model = PoseResNet()
-
-# 	def forward(self, x):
-# 		embedding = self.encoder(x)
-# 		return embedding
-
-# 	def configure_optimizers(self):
-# 		optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
-# 		return optimizer
-
-# 	def training_step(self, train_batch, batch_idx):
-# 		x, y = train_batch
-# 		x = x.view(x.size(0), -1)
-# 		z = self.encoder(x)    
-# 		x_hat = self.decoder(z)
-# 		loss = F.mse_loss(x_hat, x)
-# 		self.log('train_loss', loss)
-# 		return loss
-
-# 	def validation_step(self, val_batch, batch_idx):
-# 		x, y = val_batch
-# 		x = x.view(x.size(0), -1)
-# 		z = self.encoder(x)
-# 		x_hat = self.decoder(z)
-# 		loss = F.mse_loss(x_hat, x)
-# 		self.log('val_loss', loss)
+# default `log_dir` is "runs" - we'll be more specific here
+tsb_writer = SummaryWriter('./tensorboard')
 
 
 class ModelWithLoss(torch.nn.Module):
@@ -63,7 +39,7 @@ class ModelWithLoss(torch.nn.Module):
   def forward(self, batch):
     outputs = self.model(batch['input'])
     loss, loss_stats = self.loss(outputs, batch)
-    return outputs[-1], loss, loss_stats
+    return outputs[-1], loss, loss_stats             
 
 
 def main(args):
@@ -81,15 +57,18 @@ def main(args):
 
     # make the dataloaders
     train_dataset = CTDetDataset(cfg['dataset'], DATA_ROOT, 'train')
-    train_loader = torch.utils.data.DataLoader(train_dataset,
-                                               batch_size=cfg['batch_size'],
-                                               shuffle=True,
-                                               num_workers=cfg['num_workers'],
-                                               pin_memory=True
-    )
+
+    # train_loader = torch.utils.data.DataLoader(train_dataset,
+    #                                            batch_size=cfg['batch_size'],
+    #                                            shuffle=True,
+    #                                            num_workers=cfg['num_workers'],
+    #                                            pin_memory=True
+    # )
 
     
     val_dataset = CTDetDataset(cfg['dataset'], DATA_ROOT, 'val')
+    # tmp = next(iter(val_dataset))
+    # import pdb; pdb.set_trace()
     val_loader = torch.utils.data.DataLoader(val_dataset,
                                                batch_size=cfg['batch_size'],
                                                shuffle=False,
@@ -107,16 +86,18 @@ def main(args):
     model = get_pose_net(num_layers, heads, head_conv)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    loss = CtdetLoss(cfg['loss'])
-    model_with_loss = ModelWithLoss(model, loss)
+    loss_f = CtdetLoss(cfg['loss'])
+    model_with_loss = ModelWithLoss(model, loss_f)
     model_with_loss = model_with_loss.to(device=device)
 
-    epochs = 1
-    eval_interval = 2 
+    epochs = 10
+    eval_interval = 1
+    save_interval = 2
 
     for epoch in range(epochs):
         # train one epoch
         # model.train()
+        # running_loss = 0.0
         # for batch in tqdm(train_loader):
         #     batch = {k:batch[k].to(device=device, non_blocking=True) for k in batch.keys() if k != 'meta'}
         #     output, loss, loss_stats = model_with_loss(batch)
@@ -124,55 +105,91 @@ def main(args):
         #     optimizer.zero_grad()
         #     loss.backward()
         #     optimizer.step()
+        #     running_loss += loss.item()
         #     del batch, output, loss, loss_stats
         #     torch.cuda.empty_cache()
+
+        # # # log the running loss
+        # tsb_writer.add_scalar('training loss', running_loss / len(train_dataset), epoch)
 
         # if the epoch is evaluation interval, evaluate the model
         if epoch % eval_interval == 0:
             model_with_loss.eval()
+            evaluator = COCOEvaluator(DATA_ROOT, 'val')
             with torch.no_grad():
-              detections = []
-              scale = 1 
-              for batch in val_loader:
-
-                  meta = batch['meta'].copy()
+              for batch in tqdm(val_loader):
+                  meta = batch['meta']
                   batch = {k:batch[k].to(device=device, non_blocking=True) for k in batch.keys() if k != 'meta'}
-                  output, loss, loss_stats = model_with_loss(batch)
-                  hm = output['hm'].sigmoid_()
-                  wh = output['wh']
-                  reg = output['reg']
-                  dets = ctdet_decode(hm, wh, reg=reg, cat_spec_wh=False, K=max_obj)
-                  
+                  # output, loss, loss_stats = model_with_loss(batch)
+                  # hm = output['hm'].sigmoid_()
+                  # wh = output['wh']
+                  # reg = output['reg']
+                  # hm = batch['hm'].sigmoid_()
+                  hm = batch['hm']
+                  wh = batch['wh']
+                  reg = batch['reg']
+                  dets = ctdet_decode(hm, wh, reg, K=max_obj)
                   torch.cuda.synchronize()
                   
                   dets = dets.detach().cpu().numpy()
                   batch_sz = dets.shape[0]
-                  dets = dets.reshape(batch_sz, -1, dets.shape[2])
-                  
-                  mc = meta['mc'].numpy()
-                  ms = meta['ms'].numpy() 
-                  h = meta['out_height'].numpy()
-                  w = meta['out_width'].numpy()
-                  dets = ctdet_post_process(dets.copy(), mc, ms, h, w, num_classes=num_classes) 
-
+                  # dets = dets.reshape(batch_sz, -1, dets.shape[2])
+                 
+                  # scale up the detections
                   for i in range(batch_sz):
-                    for j in range(1, num_classes+1):
-                      dets[i][j] = np.array(dets[i][j], dtype=np.float32).reshape(-1, 5)
-                      dets[i][j][:, :4] /= scale
+                    out_scale = meta['out_scale'][i].numpy()
+                    img_dets = dets[i]
+                    img_dets = img_dets[img_dets[:, 4] > 0.]
+                    img_dets[:, [0, 2]] = img_dets[:, [0, 2]] / out_scale[0]
+                    img_dets[:, [1, 3]] = img_dets[:, [1, 3]] / out_scale[1]
+                    # evaluator.add_img_dets(meta['img_id'][i], img_dets)
+                    img = batch['input'][i].permute(1, 2, 0).cpu().numpy()
+                    img_sz = meta['img_sz'][i].numpy()
+                    img_rs = cv2.resize(img, (img_sz[1], img_sz[0]), interpolation=cv2.INTER_LINEAR)
 
-                    # results = merge_outputs(dets[i], num_classes=num_classes, max_per_image=max_obj)
+                    # draw the detections
+                    for dt in img_dets:
+                      x0,y0,x1,y1 = tuple(map(int, dt[:4]))
+                      img_rs = cv2.rectangle(img_rs, (x0, y0), (x1, y1), (0, 0, 255), 2)
+                      
+                    # draw the ground truth
+                    gt_dets = meta['gt_det'][i].numpy()
+                    for gt in gt_dets:
+                      _x0,_y0,_x1,_y1 = tuple(map(int, gt[:4]))
+                      img_rs = cv2.rectangle(img_rs, (_x0, _y0), (_x1, _y1), (0, 255, 0), 1)
+                    print(img_dets)
+                    print(gt_dets) 
+                    cv2.imwrite(f'./{meta["img_id"][i]}.jpg', img_rs) 
+                    return
                   
-                    detections.append(dets)
-                  break # NOMERGE
+                  # mc = meta['mc'].numpy()
+                  # ms = meta['ms'].numpy() 
+                  # h = meta['out_height'].numpy()
+                  # w = meta['out_width'].numpy()
+                  # dets = ctdet_post_process(dets.copy(), mc, ms, h, w, num_classes=num_classes) 
+
+                  # for i in range(batch_sz):
+                  #   for j in range(1, num_classes+1):
+                  #     dets[i][j] = np.array(dets[i][j], dtype=np.float32).reshape(-1, 5)
             
-            import pdb; pdb.set_trace()
-            # TODO: compare the outputs with the labels and compute mAp (COCO)
+            mAp, mAp50 = evaluator.evaluate()
+            print(f"mAP: {mAp}, mAP@50: {mAp50} for epoch {epoch} in {epochs}")
+            return
+            
+            # add to the tensorboard 
+            tsb_writer.add_scalar('validation mAP', mAp, epoch)
+            tsb_writer.add_scalar('validation mAP@50', mAp50, epoch)
+
             del batch, output, loss, loss_stats
             torch.cuda.empty_cache()
-
-        # if epoch % save_interval == 0:
-        #     # save the model
-        #     model.save(os.path.joint(SAVE_DIR, 'latest.pth'))
+        
+        # save the model
+        SAVE_ROOT.mkdir(parents=True, exist_ok=True)
+        model_path = SAVE_ROOT / 'latest.pth'
+        torch.save(model_with_loss.model.state_dict(), model_path)
+        if epoch % save_interval == 0:
+            model_path = SAVE_ROOT / f'epoch_{epoch}.pth'
+            torch.save(model_with_loss.model.state_dict(), model_path)
 
 
 if __name__  == "__main__":
