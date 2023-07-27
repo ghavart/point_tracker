@@ -187,11 +187,11 @@ class CTDetDataset(torch.utils.data.Dataset):
             reg[k] = ct - ct_int
             reg_mask[k] = 1
             
-            gt_det.append([*bbox_cp, 1, cls_id])
+            # gt_det.append([*bbox_cp, 1, cls_id])
 
         ret = {'input': inp, 'hm': hm, 'reg_mask': reg_mask, 'ind': ind, 'wh': wh, 'reg': reg}
         gt_det = np.array(gt_det, dtype=np.float32) if len(gt_det) > 0 else np.zeros((1, 6), dtype=np.float32)
-        meta = {'img_id': img_id, 'img_sz': np.array(img.shape[:2]), 'out_scale': out_scale, 'gt_det': gt_det, "img": img}
+        meta = {'img_id': img_id, 'img_sz': np.array(img.shape[:2]), 'out_scale': out_scale} #, 'gt_det': gt_det}
         ret.update({'meta' : meta})
 
         return ret
