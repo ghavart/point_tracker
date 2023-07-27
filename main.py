@@ -57,18 +57,14 @@ def main(args):
 
     # make the dataloaders
     train_dataset = CTDetDataset(cfg['dataset'], DATA_ROOT, 'train')
-
-    # train_loader = torch.utils.data.DataLoader(train_dataset,
-    #                                            batch_size=cfg['batch_size'],
-    #                                            shuffle=True,
-    #                                            num_workers=cfg['num_workers'],
-    #                                            pin_memory=True
-    # )
-
+    train_loader = torch.utils.data.DataLoader(train_dataset,
+                                               batch_size=cfg['batch_size'],
+                                               shuffle=True,
+                                               num_workers=cfg['num_workers'],
+                                               pin_memory=True
+    )
     
     val_dataset = CTDetDataset(cfg['dataset'], DATA_ROOT, 'val')
-    # tmp = next(iter(val_dataset))
-    # import pdb; pdb.set_trace()
     val_loader = torch.utils.data.DataLoader(val_dataset,
                                                batch_size=cfg['batch_size'],
                                                shuffle=False,
@@ -96,44 +92,42 @@ def main(args):
 
     for epoch in range(epochs):
         # train one epoch
-        # model.train()
-        # running_loss = 0.0
-        # for batch in tqdm(train_loader):
-        #     batch = {k:batch[k].to(device=device, non_blocking=True) for k in batch.keys() if k != 'meta'}
-        #     output, loss, loss_stats = model_with_loss(batch)
-        #     loss = loss.mean()
-        #     optimizer.zero_grad()
-        #     loss.backward()
-        #     optimizer.step()
-        #     running_loss += loss.item()
-        #     del batch, output, loss, loss_stats
-        #     torch.cuda.empty_cache()
+        model.train()
+        running_loss = 0.0
+        for batch in tqdm(train_loader):
+            batch = {k:batch[k].to(device=device, non_blocking=True) for k in batch.keys() if k != 'meta'}
+            output, loss, loss_stats = model_with_loss(batch)
+            loss = loss.mean()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+            del batch, output, loss, loss_stats
+            torch.cuda.empty_cache()
 
-        # # # log the running loss
-        # tsb_writer.add_scalar('training loss', running_loss / len(train_dataset), epoch)
+        # log the running loss
+        tsb_writer.add_scalar('training loss', running_loss / len(train_dataset), epoch)
 
         # if the epoch is evaluation interval, evaluate the model
         if epoch % eval_interval == 0:
             model_with_loss.eval()
-            evaluator = COCOEvaluator(DATA_ROOT, 'val')
+            evaluator = COCOEvaluator(val_dataset.annot_path, val_dataset.cat_ids)
             with torch.no_grad():
               for batch in tqdm(val_loader):
                   meta = batch['meta']
                   batch = {k:batch[k].to(device=device, non_blocking=True) for k in batch.keys() if k != 'meta'}
-                  # output, loss, loss_stats = model_with_loss(batch)
-                  # hm = output['hm'].sigmoid_()
-                  # wh = output['wh']
-                  # reg = output['reg']
-                  # hm = batch['hm'].sigmoid_()
-                  hm = batch['hm']
-                  wh = batch['wh']
-                  reg = batch['reg']
+                  output, loss, loss_stats = model_with_loss(batch)
+                  hm = output['hm'].sigmoid_()
+                  wh = output['wh']
+                  reg = output['reg']
+                  # hm = batch['hm']
+                  # wh = batch['wh']
+                  # reg = batch['reg']
                   dets = ctdet_decode(hm, wh, reg, K=max_obj)
                   torch.cuda.synchronize()
                   
                   dets = dets.detach().cpu().numpy()
                   batch_sz = dets.shape[0]
-                  # dets = dets.reshape(batch_sz, -1, dets.shape[2])
                  
                   # scale up the detections
                   for i in range(batch_sz):
@@ -142,25 +136,26 @@ def main(args):
                     img_dets = img_dets[img_dets[:, 4] > 0.]
                     img_dets[:, [0, 2]] = img_dets[:, [0, 2]] / out_scale[0]
                     img_dets[:, [1, 3]] = img_dets[:, [1, 3]] / out_scale[1]
-                    # evaluator.add_img_dets(meta['img_id'][i], img_dets)
-                    img = batch['input'][i].permute(1, 2, 0).cpu().numpy()
-                    img_sz = meta['img_sz'][i].numpy()
-                    img_rs = cv2.resize(img, (img_sz[1], img_sz[0]), interpolation=cv2.INTER_LINEAR)
+                    evaluator.add_img_dets(meta['img_id'][i], img_dets)
+                    # img = batch['input'][i].permute(1, 2, 0).cpu().numpy()
+                    # img_sz = meta['img_sz'][i].numpy()
+                    # img_rs = cv2.resize(img, (img_sz[1], img_sz[0]), interpolation=cv2.INTER_LINEAR)
 
-                    # draw the detections
-                    for dt in img_dets:
-                      x0,y0,x1,y1 = tuple(map(int, dt[:4]))
-                      img_rs = cv2.rectangle(img_rs, (x0, y0), (x1, y1), (0, 0, 255), 2)
+                    # # draw the detections
+                    # for dt in img_dets:
+                    #   x0,y0,x1,y1 = tuple(map(int, dt[:4]))
+                    #   img_rs = cv2.rectangle(img_rs, (x0, y0), (x1, y1), (0, 0, 255), 2)
                       
-                    # draw the ground truth
-                    gt_dets = meta['gt_det'][i].numpy()
-                    for gt in gt_dets:
-                      _x0,_y0,_x1,_y1 = tuple(map(int, gt[:4]))
-                      img_rs = cv2.rectangle(img_rs, (_x0, _y0), (_x1, _y1), (0, 255, 0), 1)
-                    print(img_dets)
-                    print(gt_dets) 
-                    cv2.imwrite(f'./{meta["img_id"][i]}.jpg', img_rs) 
-                    return
+                    # # draw the ground truth
+                    # gt_dets = meta['gt_det'][i].numpy()
+                    # evaluator.add_img_dets(meta['img_id'][i], gt_dets)
+                    # for gt in gt_dets:
+                    #   _x0,_y0,_x1,_y1 = tuple(map(int, gt[:4]))
+                    #   img_rs = cv2.rectangle(img_rs, (_x0, _y0), (_x1, _y1), (0, 255, 0), 1)
+                    # # print(img_dets)
+                    # # print(gt_dets) 
+                    # cv2.imwrite(f'./{meta["img_id"][i]}.jpg', img_rs) 
+                    # return
                   
                   # mc = meta['mc'].numpy()
                   # ms = meta['ms'].numpy() 
@@ -173,8 +168,7 @@ def main(args):
                   #     dets[i][j] = np.array(dets[i][j], dtype=np.float32).reshape(-1, 5)
             
             mAp, mAp50 = evaluator.evaluate()
-            print(f"mAP: {mAp}, mAP@50: {mAp50} for epoch {epoch} in {epochs}")
-            return
+            # print(f"mAP: {mAp}, mAP@50: {mAp50} for epoch {epoch} in {epochs}")
             
             # add to the tensorboard 
             tsb_writer.add_scalar('validation mAP', mAp, epoch)

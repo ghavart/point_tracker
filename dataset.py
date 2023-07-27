@@ -112,16 +112,6 @@ class CTDetDataset(torch.utils.data.Dataset):
             72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 
             82, 84, 85, 86, 87, 88, 89, 90]
         self.cat_ids = {v: i for i, v in enumerate(self._valid_ids)}
-        self.voc_color = [(v // 32 * 64 + 64, (v // 8) % 4 * 64, v % 8 * 32) for v in range(1, self.num_classes + 1)] 
-        
-        self._data_rng = np.random.RandomState(123)
-        self._eig_val = np.array([0.2141788, 0.01817699, 0.00341571],
-                             dtype=np.float32)
-        self._eig_vec = np.array([
-            [-0.58752847, -0.69563484, 0.41340352],
-            [-0.5832747, 0.00994535, -0.81221408],
-            [-0.56089297, 0.71832671, 0.41158938]
-        ], dtype=np.float32)
 
     def __len__(self):
         return self.num_samples
@@ -149,19 +139,17 @@ class CTDetDataset(torch.utils.data.Dataset):
 
         input_w, input_h, = self.cfg['input_w'], self.cfg['input_h'] 
         inp = cv2.resize(img, (input_w, input_h), interpolation=cv2.INTER_LINEAR) 
-        # inp = (inp.astype(np.float32) / 255.)
 
         # normalize and to_tensor 
-        # inp = (inp - self.mean) / self.std
+        inp = (inp.astype(np.float32) / 255.)
+        inp = (inp - self.mean) / self.std
         inp = inp.transpose(2, 0, 1)
         
         output_w, output_h = input_w // self.cfg['down_ratio'], input_h // self.cfg['down_ratio']
         out_scale = np.array([output_w / img.shape[1], output_h / img.shape[0]])
-        # trans_output = get_affine_transform(c, s, 0, [output_w, output_h])
 
         hm = np.zeros((self.num_classes, output_h, output_w), dtype=np.float32)
         wh = np.zeros((self.max_objs, 2), dtype=np.float32)
-        # dense_wh = np.zeros((2, output_h, output_w), dtype=np.float32)
         
         reg = np.zeros((self.max_objs, 2), dtype=np.float32)
         ind = np.zeros((self.max_objs), dtype=np.int64)
@@ -172,8 +160,8 @@ class CTDetDataset(torch.utils.data.Dataset):
 
         gt_det = []
         for k in range(num_objs):
-            if k > 1:
-                break
+            # if k > 1:
+            #     break
             
             ann = anns[k]
             bbox = self._coco_box_to_bbox(ann['bbox'])
@@ -183,9 +171,6 @@ class CTDetDataset(torch.utils.data.Dataset):
             # resize the box to the input size
             bbox[[0, 2]] = bbox[[0, 2]] * out_scale[0]
             bbox[[1, 3]] = bbox[[1, 3]] * out_scale[1]
-            
-            # bbox[[0, 2]] = np.clip(bbox[[0, 2]], 0, output_w - 1)
-            # bbox[[1, 3]] = np.clip(bbox[[1, 3]], 0, output_h - 1)
             
             h, w = bbox[3] - bbox[1], bbox[2] - bbox[0]
             if h <= 0 and w <= 0:
@@ -202,17 +187,11 @@ class CTDetDataset(torch.utils.data.Dataset):
             reg[k] = ct - ct_int
             reg_mask[k] = 1
             
-            # cat_spec_wh[k, cls_id * 2: cls_id * 2 + 2] = wh[k]
-            # cat_spec_mask[k, cls_id * 2: cls_id * 2 + 2] = 1
-            
-            # if self.cfg['dense_wh']:
-            #     draw_dense_reg(dense_wh, hm.max(axis=0), ct_int, wh[k], radius)
-            # gt_det.append([ct[0] - w / 2, ct[1] - h / 2, ct[0] + w / 2, ct[1] + h / 2, 1, cls_id])
             gt_det.append([*bbox_cp, 1, cls_id])
 
         ret = {'input': inp, 'hm': hm, 'reg_mask': reg_mask, 'ind': ind, 'wh': wh, 'reg': reg}
         gt_det = np.array(gt_det, dtype=np.float32) if len(gt_det) > 0 else np.zeros((1, 6), dtype=np.float32)
-        meta = {'img_id': img_id, 'img_sz': np.array(img.shape[:2]), 'out_scale': out_scale, 'gt_det': gt_det} #'input_h': input_h, 'input_w': input_w}
+        meta = {'img_id': img_id, 'img_sz': np.array(img.shape[:2]), 'out_scale': out_scale, 'gt_det': gt_det, "img": img}
         ret.update({'meta' : meta})
 
         return ret
