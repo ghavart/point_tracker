@@ -72,23 +72,25 @@ def main(args):
                                                pin_memory=True
     )
 
-    lr = 1e-3
+    # invariants
+    # TODO: make these configurable
     num_classes = 80
-    max_obj = 128
     heads = {'hm': num_classes, 'reg': 2, 'wh': 2}
     head_conv = 64
-    num_layers = 18 # 34 
+    
+    max_obj = cfg['max_obj']
+    num_layers = cfg['num_layers'] 
 
     model = get_pose_net(num_layers, heads, head_conv)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg['lr'])
 
     loss_f = CtdetLoss(cfg['loss'])
     model_with_loss = ModelWithLoss(model, loss_f)
     model_with_loss = model_with_loss.to(device=device)
 
-    epochs = 10
+    epochs = 60
     eval_interval = 1
-    save_interval = 2
+    save_interval = 4
 
     for epoch in range(epochs):
         # train one epoch
@@ -120,9 +122,6 @@ def main(args):
                   hm = output['hm'].sigmoid_()
                   wh = output['wh']
                   reg = output['reg']
-                  # hm = batch['hm']
-                  # wh = batch['wh']
-                  # reg = batch['reg']
                   dets = ctdet_decode(hm, wh, reg, K=max_obj)
                   torch.cuda.synchronize()
                   
@@ -137,38 +136,8 @@ def main(args):
                     img_dets[:, [0, 2]] = img_dets[:, [0, 2]] / out_scale[0]
                     img_dets[:, [1, 3]] = img_dets[:, [1, 3]] / out_scale[1]
                     evaluator.add_img_dets(meta['img_id'][i], img_dets)
-                    # img = batch['input'][i].permute(1, 2, 0).cpu().numpy()
-                    # img_sz = meta['img_sz'][i].numpy()
-                    # img_rs = cv2.resize(img, (img_sz[1], img_sz[0]), interpolation=cv2.INTER_LINEAR)
-
-                    # # draw the detections
-                    # for dt in img_dets:
-                    #   x0,y0,x1,y1 = tuple(map(int, dt[:4]))
-                    #   img_rs = cv2.rectangle(img_rs, (x0, y0), (x1, y1), (0, 0, 255), 2)
-                      
-                    # # draw the ground truth
-                    # gt_dets = meta['gt_det'][i].numpy()
-                    # evaluator.add_img_dets(meta['img_id'][i], gt_dets)
-                    # for gt in gt_dets:
-                    #   _x0,_y0,_x1,_y1 = tuple(map(int, gt[:4]))
-                    #   img_rs = cv2.rectangle(img_rs, (_x0, _y0), (_x1, _y1), (0, 255, 0), 1)
-                    # # print(img_dets)
-                    # # print(gt_dets) 
-                    # cv2.imwrite(f'./{meta["img_id"][i]}.jpg', img_rs) 
-                    # return
-                  
-                  # mc = meta['mc'].numpy()
-                  # ms = meta['ms'].numpy() 
-                  # h = meta['out_height'].numpy()
-                  # w = meta['out_width'].numpy()
-                  # dets = ctdet_post_process(dets.copy(), mc, ms, h, w, num_classes=num_classes) 
-
-                  # for i in range(batch_sz):
-                  #   for j in range(1, num_classes+1):
-                  #     dets[i][j] = np.array(dets[i][j], dtype=np.float32).reshape(-1, 5)
             
             mAp, mAp50 = evaluator.evaluate()
-            # print(f"mAP: {mAp}, mAP@50: {mAp50} for epoch {epoch} in {epochs}")
             
             # add to the tensorboard 
             tsb_writer.add_scalar('validation mAP', mAp, epoch)

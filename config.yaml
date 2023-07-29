@@ -19,9 +19,11 @@ dataset:
   dense_wh: False
   no_color_aug: False # yes for color augmentation
 
-batch_size: 64 
+batch_size: 48 
 num_workers: 8 
-lr: 0.00025
+lr: 0.001
+max_obj: 128
+num_layers: 34 # 18 
 
 loss:
   wh_weight: 0.1
@@ -30,5 +32,3 @@ loss:
   reg_offset: True
   num_stacks: 1
   mse_loss: False
-
-K: 100

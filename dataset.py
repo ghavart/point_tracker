@@ -153,21 +153,13 @@ class CTDetDataset(torch.utils.data.Dataset):
         
         reg = np.zeros((self.max_objs, 2), dtype=np.float32)
         ind = np.zeros((self.max_objs), dtype=np.int64)
-        
         reg_mask = np.zeros((self.max_objs), dtype=np.uint8)
-        cat_spec_wh = np.zeros((self.max_objs, self.num_classes * 2), dtype=np.float32)
-        cat_spec_mask = np.zeros((self.max_objs, self.num_classes * 2), dtype=np.uint8)
-
-        gt_det = []
+        
         for k in range(num_objs):
-            # if k > 1:
-            #     break
-            
             ann = anns[k]
             bbox = self._coco_box_to_bbox(ann['bbox'])
             cls_id = int(self.cat_ids[ann['category_id']])
 
-            bbox_cp = bbox.copy()
             # resize the box to the input size
             bbox[[0, 2]] = bbox[[0, 2]] * out_scale[0]
             bbox[[1, 3]] = bbox[[1, 3]] * out_scale[1]
@@ -187,11 +179,8 @@ class CTDetDataset(torch.utils.data.Dataset):
             reg[k] = ct - ct_int
             reg_mask[k] = 1
             
-            # gt_det.append([*bbox_cp, 1, cls_id])
-
         ret = {'input': inp, 'hm': hm, 'reg_mask': reg_mask, 'ind': ind, 'wh': wh, 'reg': reg}
-        gt_det = np.array(gt_det, dtype=np.float32) if len(gt_det) > 0 else np.zeros((1, 6), dtype=np.float32)
-        meta = {'img_id': img_id, 'img_sz': np.array(img.shape[:2]), 'out_scale': out_scale} #, 'gt_det': gt_det}
+        meta = {'img_id': img_id, 'img_sz': np.array(img.shape[:2]), 'out_scale': out_scale}
         ret.update({'meta' : meta})
 
         return ret
